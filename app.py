@@ -16,15 +16,6 @@ from src.config import (
     SOCIOECONOMIC_CSV_URL,
     COMMUNITY_AREAS_GEOJSON_URL,
 )
-from src.data_ingestion import (
-    fetch_cpd_crimes,
-    fetch_socioeconomic,
-    fetch_community_areas_geojson,
-)
-from src.preprocessing import (
-    load_and_clean,
-    build_monthly_by_community,
-)
 
 def _detect_fid_key(geojson):
     try:
@@ -49,27 +40,6 @@ def _detect_fid_key(geojson):
 # -----------------------------
 @st.cache_data(show_spinner=False)
 def load_data():
-    # Auto-ingest and preprocess if processed files are missing
-    errors = []
-    try:
-        missing_clean = not os.path.exists(CLEANED_CPD_FILE)
-        missing_agg = not os.path.exists(AGG_MONTHLY_FILE)
-        if missing_clean or missing_agg:
-            # Pull last 12 months window
-            end = pd.Timestamp.utcnow()
-            start = (end - pd.DateOffset(months=12)).strftime("%Y-%m-%dT%H:%M:%S.000")
-            end_iso = end.strftime("%Y-%m-%dT%H:%M:%S.000")
-            try:
-                fetch_cpd_crimes(start_date=start, end_date=end_iso)
-                fetch_socioeconomic()
-                fetch_community_areas_geojson()
-                load_and_clean()
-                build_monthly_by_community()
-            except Exception as e:
-                errors.append(f"pipeline_error: {e}")
-    except Exception as e:
-        errors.append(f"precheck_error: {e}")
-
     crimes = pd.read_csv(CLEANED_CPD_FILE, parse_dates=["date", "month_start"]) if os.path.exists(CLEANED_CPD_FILE) else pd.DataFrame()
     agg = pd.read_csv(AGG_MONTHLY_FILE, parse_dates=["month_start"]) if os.path.exists(AGG_MONTHLY_FILE) else pd.DataFrame()
     ranking_lr = pd.read_csv(RISK_RANKING_FILE) if os.path.exists(RISK_RANKING_FILE) else pd.DataFrame()
@@ -201,12 +171,6 @@ def load_data():
             geojson = gj_resp.json()
         except Exception:
             geojson = None
-
-    # Persist load errors for UI diagnostics
-    try:
-        st.session_state["load_errors"] = errors
-    except Exception:
-        pass
 
     return crimes, agg, ranking_lr, geojson
 
@@ -412,22 +376,6 @@ def final_report(ranking_lr: pd.DataFrame):
 
 
 # -----------------------------
-# Error Dashboard
-# -----------------------------
-def error_dashboard(crimes: pd.DataFrame, agg: pd.DataFrame):
-    errs = st.session_state.get("load_errors", []) if "load_errors" in st.session_state else []
-    st.subheader("Data Load Diagnostics")
-    if crimes.empty and agg.empty:
-        st.error("No data available. Attempted to ingest and preprocess but data is still missing.")
-        st.markdown("- Check internet access for API endpoints.")
-        st.markdown("- Verify `requirements.txt` versions and redeploy clean.")
-        if errs:
-            st.markdown("**Errors:**")
-            for e in errs:
-                st.markdown(f"- {e}")
-
-
-# -----------------------------
 # Main App
 # -----------------------------
 def main():
@@ -475,10 +423,6 @@ def main():
         agg_latest = pd.DataFrame()
     scenario_modeling(agg_latest, reduction)
     final_report(ranking_lr)
-
-    # Error dashboard if nothing to show
-    if crimes_f.empty and agg_f.empty:
-        error_dashboard(crimes, agg)
 
 
 if __name__ == "__main__":
