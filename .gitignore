@@ -9,8 +9,7 @@ env/
 # OS
 .DS_Store
 
-# Trae/IDE
-.trae/
+
 
 # Data outputs (regenerate via pipeline)
 data/raw/

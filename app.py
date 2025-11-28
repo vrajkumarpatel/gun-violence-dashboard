@@ -13,6 +13,23 @@ from src.config import (
     RAW_COMMUNITY_AREAS_GEOJSON,
 )
 
+def _detect_fid_key(geojson):
+    try:
+        feats = geojson.get("features", [])
+        if not feats:
+            return "properties.area_numbe"
+        props = feats[0].get("properties", {})
+        for candidate in [
+            "area_numbe",
+            "area_num",
+            "community",
+            "area_number",
+        ]:
+            if candidate in props:
+                return f"properties.{candidate}"
+        return "properties.area_numbe"
+    except Exception:
+        return "properties.area_numbe"
 
 # -----------------------------
 # Data loading helpers
@@ -145,11 +162,12 @@ def community_choropleth(agg_filtered: pd.DataFrame, geojson):
         st.info("No data available or boundary file missing")
         return
     totals = agg_filtered.groupby("community_area")["incident_count"].sum().reset_index()
+    fid = _detect_fid_key(geojson)
     fig = px.choropleth(
         totals,
         geojson=geojson,
         locations="community_area",
-        featureidkey="properties.area_numbe",
+        featureidkey=fid,
         color="incident_count",
         color_continuous_scale="Reds",
         scope="usa",
