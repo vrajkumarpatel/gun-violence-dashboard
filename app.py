@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 import streamlit as st
 import plotly.express as px
+import requests
 
 # Import project configuration paths
 from src.config import (
@@ -11,6 +12,9 @@ from src.config import (
     AGG_MONTHLY_FILE,
     RISK_RANKING_FILE,
     RAW_COMMUNITY_AREAS_GEOJSON,
+    CPD_CRIMES_ENDPOINT,
+    SOCIOECONOMIC_CSV_URL,
+    COMMUNITY_AREAS_GEOJSON_URL,
 )
 
 def _detect_fid_key(geojson):
@@ -47,6 +51,121 @@ def load_data():
                 geojson = _json.load(f)
     except Exception:
         geojson = None
+
+    def _standardize_columns(df: pd.DataFrame) -> pd.DataFrame:
+        df.columns = [c.strip().lower().replace(" ", "_") for c in df.columns]
+        return df
+
+    def _parse_dates(df: pd.DataFrame) -> pd.DataFrame:
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+        df = df.dropna(subset=["date"]).copy()
+        df["month_start"] = df["date"].dt.to_period("M").dt.start_time
+        return df
+
+    def _gun_flag(df: pd.DataFrame) -> pd.DataFrame:
+        desc = df.get("description", pd.Series(index=df.index, dtype=str)).astype(str).str.upper()
+        prim = df.get("primary_type", pd.Series(index=df.index, dtype=str)).astype(str).str.upper()
+        keywords = ["HANDGUN", "FIREARM", "RIFLE", "REVOLVER", "GUN", "SHOT", "SHOTS", "WEAPON"]
+        kw = desc.apply(lambda s: any(k in s for k in keywords))
+        ph = prim.str.contains("WEAPONS VIOLATION|HOMICIDE|BATTERY|ASSAULT|ROBBERY", regex=True)
+        df["gun_related"] = kw | ph
+        return df
+
+    if crimes.empty:
+        try:
+            # First attempt: Socrata JSON API (no $select to avoid parameter compatibility issues)
+            params = {"$limit": 20000}
+            resp = requests.get(CPD_CRIMES_ENDPOINT, params=params, timeout=60)
+            resp.raise_for_status()
+            data = resp.json()
+            if isinstance(data, list):
+                crimes = pd.DataFrame(data)
+            else:
+                crimes = pd.DataFrame()
+        except Exception:
+            crimes = pd.DataFrame()
+
+        # Fallback: CSV bulk download if JSON API failed or returned empty
+        if crimes.empty:
+            try:
+                csv_url = "https://data.cityofchicago.org/api/views/ijzp-q8t2/rows.csv?accessType=DOWNLOAD"
+                crimes = pd.read_csv(csv_url)
+            except Exception:
+                crimes = pd.DataFrame()
+
+        if not crimes.empty:
+            crimes = _standardize_columns(crimes)
+            # Ensure expected columns exist
+            if "id" not in crimes.columns and "case_number" in crimes.columns:
+                crimes = crimes.rename(columns={"case_number": "id"})
+            crimes = _parse_dates(crimes)
+            crimes = _gun_flag(crimes)
+            for c in ["arrest", "domestic"]:
+                if c in crimes.columns:
+                    crimes[c] = crimes[c].astype(str).str.lower().map({"true": True, "false": False, "t": True, "f": False})
+
+    if agg.empty:
+        if crimes.empty:
+            agg = pd.DataFrame()
+        else:
+            crimes_ca = crimes.dropna(subset=["community_area"]).copy()
+            crimes_ca["community_area"] = pd.to_numeric(crimes_ca["community_area"], errors="coerce")
+            crimes_ca = crimes_ca.dropna(subset=["community_area"]).copy()
+            crimes_ca["is_homicide"] = crimes_ca["primary_type"].astype(str).str.upper().eq("HOMICIDE")
+            desc_upper = crimes_ca["description"].astype(str).str.upper()
+            crimes_ca["is_injury"] = crimes_ca["primary_type"].astype(str).str.upper().eq("BATTERY") & (
+                desc_upper.str.contains("AGGRAVATED|SHOOT|SHOT|HANDGUN|FIREARM")
+            )
+            monthly = (
+                crimes_ca.groupby(["community_area", "month_start"]).agg(
+                    incident_count=("id", "count"),
+                    arrests=("arrest", "sum"),
+                    domestic=("domestic", "sum"),
+                    fatalities=("is_homicide", "sum"),
+                    injuries=("is_injury", "sum"),
+                ).reset_index()
+            )
+            try:
+                socio = pd.read_csv(SOCIOECONOMIC_CSV_URL)
+                socio = _standardize_columns(socio)
+                if "community area number" in socio.columns:
+                    socio = socio.rename(columns={"community area number": "community_area"})
+                if "community_area_number" in socio.columns:
+                    socio = socio.rename(columns={"community_area_number": "community_area"})
+                socio["community_area"] = pd.to_numeric(socio["community_area"], errors="coerce")
+                socio = socio.dropna(subset=["community_area"]).copy()
+                agg = monthly.merge(socio, on="community_area", how="left")
+                for col in [
+                    "percent_households_below_poverty",
+                    "percent_aged_16_unemployed",
+                    "percent_aged_25_without_high_school_diploma",
+                    "percent_aged_under_18_or_over_64",
+                    "percent_of_housing_crowded",
+                    "per_capita_income",
+                    "hardship_index",
+                ]:
+                    if col in agg.columns:
+                        vals = agg[col].astype(float)
+                        agg[f"z_{col}"] = (vals - vals.mean()) / (vals.std() + 1e-9)
+            except Exception:
+                agg = monthly
+
+    if ranking_lr.empty and not agg.empty:
+        df = agg.copy()
+        thr = df["incident_count"].quantile(0.75)
+        df["high_risk"] = (df["incident_count"] >= thr).astype(int)
+        latest = df.groupby("community_area").apply(lambda g: g.sort_values("month_start").tail(1)).reset_index(drop=True)
+        latest["risk_score"] = latest["incident_count"] / (latest["incident_count"].max() or 1.0)
+        ranking_lr = latest[["community_area", "risk_score", "incident_count"]]
+
+    if geojson is None:
+        try:
+            gj_resp = requests.get(COMMUNITY_AREAS_GEOJSON_URL, timeout=60)
+            gj_resp.raise_for_status()
+            geojson = gj_resp.json()
+        except Exception:
+            geojson = None
+
     return crimes, agg, ranking_lr, geojson
 
 
