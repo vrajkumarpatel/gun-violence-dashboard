@@ -197,8 +197,10 @@ def sidebar_filters(crimes: pd.DataFrame, agg: pd.DataFrame):
     # Community areas
     communities_crimes = crimes.get("community_area", pd.Series(dtype=float)) if not crimes.empty else pd.Series(dtype=float)
     communities_agg = agg.get("community_area", pd.Series(dtype=float)) if not agg.empty else pd.Series(dtype=float)
-    communities_all = pd.Series(np.union1d(communities_crimes.dropna().unique(), communities_agg.dropna().unique()))
-    communities = sorted(communities_all.astype(int)) if not communities_all.empty else []
+    ca_cr = pd.to_numeric(communities_crimes, errors="coerce").dropna().astype(int)
+    ca_ag = pd.to_numeric(communities_agg, errors="coerce").dropna().astype(int)
+    communities_vals = np.union1d(ca_cr.values, ca_ag.values)
+    communities = sorted(communities_vals.tolist()) if communities_vals.size > 0 else []
     ca_sel = st.sidebar.multiselect("Community areas", options=communities, default=[])
 
     # Map mode and scenario modeling slider
