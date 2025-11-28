@@ -4,7 +4,7 @@
 
 Open the deployed Streamlit dashboard:
 
-`https://gun-violence-dashboard-l3zedtcamrmhu2yx7ekbcv.streamlit.app/`
+https://gun-violence-dashboard-l3zedtcamrmhu2yx7ekbcv.streamlit.app/
 
 ## Screenshots
 
