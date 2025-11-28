@@ -192,9 +192,14 @@ def sidebar_filters(crimes: pd.DataFrame, agg: pd.DataFrame):
         months_series = crimes["month_start"].dropna().sort_values().unique()
     else:
         months_series = np.array([pd.Timestamp.today()])
-    min_d = pd.to_datetime(months_series.min()).date()
-    max_d = pd.to_datetime(months_series.max()).date()
-    dr = st.sidebar.date_input("Date range", value=(min_d, max_d))
+    min_ts = pd.to_datetime(months_series.min())
+    max_ts = pd.to_datetime(months_series.max())
+    start_def = max_ts - pd.DateOffset(months=11)
+    if start_def < min_ts:
+        start_def = min_ts
+    min_d = min_ts.date()
+    max_d = max_ts.date()
+    dr = st.sidebar.date_input("Date range", value=(start_def.date(), max_d))
     if isinstance(dr, (list, tuple)) and len(dr) == 2:
         start, end = dr
     else:
