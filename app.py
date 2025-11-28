@@ -158,7 +158,8 @@ def load_data():
         df = agg.copy()
         thr = df["incident_count"].quantile(0.75)
         df["high_risk"] = (df["incident_count"] >= thr).astype(int)
-        latest = df.groupby("community_area").apply(lambda g: g.sort_values("month_start").tail(1)).reset_index(drop=True)
+        df_sorted = df.sort_values(["community_area", "month_start"])  
+        latest = df_sorted.drop_duplicates(subset=["community_area"], keep="last")
         latest["risk_score"] = latest["incident_count"] / (latest["incident_count"].max() or 1.0)
         ranking_lr = latest[["community_area", "risk_score", "incident_count"]]
 
