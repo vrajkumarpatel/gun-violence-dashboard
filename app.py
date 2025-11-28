@@ -159,8 +159,9 @@ def load_data():
         thr = df["incident_count"].quantile(0.75)
         df["high_risk"] = (df["incident_count"] >= thr).astype(int)
         df_sorted = df.sort_values(["community_area", "month_start"])  
-        latest = df_sorted.drop_duplicates(subset=["community_area"], keep="last")
-        latest["risk_score"] = latest["incident_count"] / (latest["incident_count"].max() or 1.0)
+        latest = df_sorted.drop_duplicates(subset=["community_area"], keep="last").copy()
+        m = latest["incident_count"].max() or 1.0
+        latest.loc[:, "risk_score"] = latest["incident_count"] / m
         ranking_lr = latest[["community_area", "risk_score", "incident_count"]]
 
     if geojson is None:
