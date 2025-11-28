@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+
+# OS
+.DS_Store
+
+# Trae/IDE
+.trae/
+
+# Data outputs (regenerate via pipeline)
+data/raw/
+data/processed/
+reports/
+
+# Notebook checkpoints
+.ipynb_checkpoints/

@@ -1,0 +1,264 @@
+import os
+import json
+import pandas as pd
+import numpy as np
+import streamlit as st
+import plotly.express as px
+
+# Import project configuration paths
+from src.config import (
+    CLEANED_CPD_FILE,
+    AGG_MONTHLY_FILE,
+    RISK_RANKING_FILE,
+    RAW_COMMUNITY_AREAS_GEOJSON,
+)
+
+
+# -----------------------------
+# Data loading helpers
+# -----------------------------
+@st.cache_data(show_spinner=False)
+def load_data():
+    crimes = pd.read_csv(CLEANED_CPD_FILE, parse_dates=["date", "month_start"]) if os.path.exists(CLEANED_CPD_FILE) else pd.DataFrame()
+    agg = pd.read_csv(AGG_MONTHLY_FILE, parse_dates=["month_start"]) if os.path.exists(AGG_MONTHLY_FILE) else pd.DataFrame()
+    ranking_lr = pd.read_csv(RISK_RANKING_FILE) if os.path.exists(RISK_RANKING_FILE) else pd.DataFrame()
+    geojson = None
+    try:
+        import json as _json
+        if os.path.exists(RAW_COMMUNITY_AREAS_GEOJSON):
+            with open(RAW_COMMUNITY_AREAS_GEOJSON, "r", encoding="utf-8") as f:
+                geojson = _json.load(f)
+    except Exception:
+        geojson = None
+    return crimes, agg, ranking_lr, geojson
+
+
+# -----------------------------
+# Sidebar filters
+# -----------------------------
+def sidebar_filters(crimes: pd.DataFrame, agg: pd.DataFrame):
+    st.sidebar.header("Filters")
+    if crimes.empty and agg.empty:
+        return None, None, None
+
+    # Date range from monthly start
+    months = agg["month_start"].dropna().sort_values().unique() if not agg.empty else crimes["month_start"].dropna().sort_values().unique()
+    start = st.sidebar.date_input("Start month", value=pd.to_datetime(months.min()).date())
+    end = st.sidebar.date_input("End month", value=pd.to_datetime(months.max()).date())
+
+    # Incident types from crimes
+    types = sorted(crimes["primary_type"].dropna().unique()) if not crimes.empty else []
+    type_sel = st.sidebar.multiselect("Incident types", options=types, default=[])
+
+    # Community areas
+    communities = sorted(pd.Series(np.union1d(crimes.get("community_area", pd.Series(dtype=float)).dropna().unique(), agg.get("community_area", pd.Series(dtype=float)).dropna().unique())).astype(int))
+    ca_sel = st.sidebar.multiselect("Community areas", options=communities, default=[])
+
+    # Map mode and scenario modeling slider
+    map_mode = st.sidebar.selectbox("Map mode", options=["Tile (OSM)", "Geo (offline)"], index=0)
+    reduction = st.sidebar.slider("Incident reduction (%)", min_value=0, max_value=50, step=5, value=0)
+    return (pd.to_datetime(start), pd.to_datetime(end)), type_sel, ca_sel, reduction, map_mode
+
+
+# -----------------------------
+# KPI cards
+# -----------------------------
+def kpi_section(agg_filtered: pd.DataFrame):
+    st.subheader("Key Metrics")
+    if agg_filtered.empty:
+        st.info("No data available for current filters")
+        return
+    total_incidents = int(agg_filtered["incident_count"].sum())
+    total_injuries = int(agg_filtered.get("injuries", pd.Series(dtype=int)).sum())
+    total_fatalities = int(agg_filtered.get("fatalities", pd.Series(dtype=int)).sum())
+    total_arrests = int(agg_filtered.get("arrests", pd.Series(dtype=int)).sum())
+    domestic_flags = int(agg_filtered.get("domestic", pd.Series(dtype=int)).sum())
+    last_month = agg_filtered["month_start"].max()
+    last_month_incidents = int(agg_filtered.loc[agg_filtered["month_start"] == last_month, "incident_count"].sum())
+
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    c1.metric("Total Incidents", f"{total_incidents:,}")
+    c2.metric("Total Injuries", f"{total_injuries:,}")
+    c3.metric("Total Fatalities", f"{total_fatalities:,}")
+    c4.metric("Total Arrests", f"{total_arrests:,}")
+    c5.metric("Domestic Incidents", f"{domestic_flags:,}")
+    c6.metric("Last Month Incidents", f"{last_month_incidents:,}")
+
+
+# -----------------------------
+# Visualizations
+# -----------------------------
+def time_series(crimes_filtered: pd.DataFrame):
+    st.subheader("Monthly Gun-Related Incidents")
+    if crimes_filtered.empty:
+        st.info("No data available for current filters")
+        return
+    monthly = crimes_filtered.groupby("month_start").size().rename("count").reset_index()
+    fig = px.line(monthly, x="month_start", y="count")
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def hotspot_map(crimes_filtered: pd.DataFrame, mode: str = "Tile (OSM)"):
+    st.subheader("Hotspot Density (Chicago)")
+    if crimes_filtered.empty:
+        st.info("No data available for current filters")
+        return
+    df = crimes_filtered.dropna(subset=["latitude", "longitude"]).copy()
+    df["latitude"] = pd.to_numeric(df["latitude"], errors="coerce")
+    df["longitude"] = pd.to_numeric(df["longitude"], errors="coerce")
+    df = df.dropna(subset=["latitude", "longitude"]).copy()
+    if mode == "Tile (OSM)":
+        fig = px.density_mapbox(
+            df,
+            lat="latitude",
+            lon="longitude",
+            radius=10,
+            center=dict(lat=41.8781, lon=-87.6298),
+            zoom=9,
+            mapbox_style="open-street-map",
+        )
+    else:
+        fig = px.scatter_geo(
+            df,
+            lat="latitude",
+            lon="longitude",
+        )
+        fig.update_geos(fitbounds="locations", visible=False)
+        fig.update_layout(title="Hotspot (Geo projection)")
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def community_choropleth(agg_filtered: pd.DataFrame, geojson):
+    st.subheader("Incidents by Community Area (Choropleth)")
+    if agg_filtered.empty or geojson is None:
+        st.info("No data available or boundary file missing")
+        return
+    totals = agg_filtered.groupby("community_area")["incident_count"].sum().reset_index()
+    fig = px.choropleth(
+        totals,
+        geojson=geojson,
+        locations="community_area",
+        featureidkey="properties.area_numbe",
+        color="incident_count",
+        color_continuous_scale="Reds",
+        scope="usa",
+    )
+    fig.update_geos(fitbounds="locations", visible=False)
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def ranking_charts(ranking_lr: pd.DataFrame, agg_filtered: pd.DataFrame):
+    st.subheader("Risk Rankings")
+    col1, col2 = st.columns(2)
+    if not ranking_lr.empty:
+        fig_lr = px.bar(ranking_lr.sort_values("risk_score", ascending=False), x="community_area", y="risk_score")
+        col1.plotly_chart(fig_lr, use_container_width=True)
+    else:
+        col1.info("Logistic Regression ranking not available")
+
+    latest = None
+    if not agg_filtered.empty and "rf_risk_score" in agg_filtered.columns:
+        latest_month = agg_filtered["month_start"].max()
+        latest = agg_filtered[agg_filtered["month_start"] == latest_month].copy()
+    if latest is not None and not latest.empty and "rf_risk_score" in latest.columns:
+        fig_rf = px.bar(latest.sort_values("rf_risk_score", ascending=False), x="community_area", y="rf_risk_score", color="rf_risk_score", color_continuous_scale="Reds")
+        col2.plotly_chart(fig_rf, use_container_width=True)
+    else:
+        col2.info("Random Forest ranking not available")
+
+
+def scenario_modeling(agg_latest: pd.DataFrame, reduction_percent: int):
+    st.subheader("Scenario Modeling: Reduce Incidents")
+    if agg_latest.empty:
+        st.info("No data available for current filters")
+        return
+    df_sc = agg_latest.copy()
+    df_sc["adjusted_incidents"] = df_sc["incident_count"] * (1 - (reduction_percent or 0) / 100.0)
+    m = df_sc["adjusted_incidents"].max() or 1.0
+    df_sc["adjusted_risk"] = df_sc["adjusted_incidents"] / m
+    fig = px.bar(df_sc, x="community_area", y="adjusted_risk", color="adjusted_risk", color_continuous_scale="Blues")
+    st.plotly_chart(fig, use_container_width=True)
+
+
+# -----------------------------
+# Final report section
+# -----------------------------
+def final_report(ranking_lr: pd.DataFrame):
+    st.subheader("Summary and Recommendations")
+    try:
+        with open(os.path.join("reports", "model_metrics.json"), "r", encoding="utf-8") as f:
+            metrics = json.load(f)
+    except Exception:
+        metrics = None
+
+    if metrics:
+        st.markdown(f"- Logistic Regression Accuracy: {metrics['accuracy']:.3f}")
+        st.markdown(f"- Precision (macro): {metrics['macro avg']['precision']:.3f}")
+        st.markdown(f"- Recall (macro): {metrics['macro avg']['recall']:.3f}")
+        st.markdown(f"- F1 (macro): {metrics['macro avg']['f1-score']:.3f}")
+    if not ranking_lr.empty:
+        top5 = ranking_lr.sort_values("risk_score", ascending=False).head(5)
+        st.markdown("**Top 5 High-Risk Community Areas (LR):**")
+        for _, r in top5.iterrows():
+            st.markdown(f"- Community Area {int(r['community_area'])}: risk_score={r['risk_score']:.3f}, incidents={int(r['incident_count'])}")
+
+    st.markdown("- Focus outreach in top-risk community areas.")
+    st.markdown("- Prioritize evening/weekend programming based on temporal patterns.")
+    st.markdown("- Coordinate with local orgs to address socioeconomic drivers (poverty, unemployment, education).")
+
+
+# -----------------------------
+# Main App
+# -----------------------------
+def main():
+    st.set_page_config(page_title="Gun Violence Data Dashboard for Community Intervention", layout="wide")
+    st.title("Gun Violence Data Dashboard for Community Intervention")
+    st.caption("Interactive KPIs, trends, maps, risk rankings, and scenario modeling for Chicago.")
+
+    crimes, agg, ranking_lr, geojson = load_data()
+    # Filter to gun-related crimes only if column present
+    if not crimes.empty and "gun_related" in crimes.columns:
+        crimes = crimes[crimes["gun_related"]]
+
+    filters = sidebar_filters(crimes, agg)
+    if not filters:
+        st.warning("Data not found. Run the pipeline first: `python main.py --fetch`.")
+        return
+    (start_date, end_date), type_sel, ca_sel, reduction, map_mode = filters
+
+    # Apply filters on crimes
+    crimes_f = crimes.copy()
+    if not crimes_f.empty:
+        crimes_f = crimes_f[(crimes_f["month_start"] >= pd.to_datetime(start_date)) & (crimes_f["month_start"] <= pd.to_datetime(end_date))]
+        if type_sel:
+            crimes_f = crimes_f[crimes_f["primary_type"].isin(type_sel)]
+        if ca_sel:
+            crimes_f["community_area"] = pd.to_numeric(crimes_f["community_area"], errors="coerce")
+            crimes_f = crimes_f[crimes_f["community_area"].isin(ca_sel)]
+
+    # Apply filters on monthly agg
+    agg_f = agg.copy()
+    if not agg_f.empty:
+        agg_f = agg_f[(agg_f["month_start"] >= pd.to_datetime(start_date)) & (agg_f["month_start"] <= pd.to_datetime(end_date))]
+        if ca_sel:
+            agg_f["community_area"] = pd.to_numeric(agg_f["community_area"], errors="coerce")
+            agg_f = agg_f[agg_f["community_area"].isin(ca_sel)]
+
+    kpi_section(agg_f)
+    time_series(crimes_f)
+    hotspot_map(crimes_f, map_mode)
+    community_choropleth(agg_f, geojson)
+    ranking_charts(ranking_lr, agg_f)
+
+    # Scenario modeling uses latest month subset
+    if not agg_f.empty:
+        latest_month = agg_f["month_start"].max()
+        agg_latest = agg_f[agg_f["month_start"] == latest_month].copy()
+    else:
+        agg_latest = pd.DataFrame()
+    scenario_modeling(agg_latest, reduction)
+    final_report(ranking_lr)
+
+
+if __name__ == "__main__":
+    main()
