@@ -183,7 +183,6 @@ def sidebar_filters(crimes: pd.DataFrame, agg: pd.DataFrame):
         today = pd.Timestamp.today()
         return (today, today), [], [], 0, "Geo (offline)"
 
-    # Date range from monthly start
     months_series = None
     if not agg.empty and "month_start" in agg.columns:
         months_series = agg["month_start"].dropna().sort_values().unique()
@@ -191,8 +190,14 @@ def sidebar_filters(crimes: pd.DataFrame, agg: pd.DataFrame):
         months_series = crimes["month_start"].dropna().sort_values().unique()
     else:
         months_series = np.array([pd.Timestamp.today()])
-    start = st.sidebar.date_input("Start month", value=pd.to_datetime(months_series.min()).date())
-    end = st.sidebar.date_input("End month", value=pd.to_datetime(months_series.max()).date())
+    min_d = pd.to_datetime(months_series.min()).date()
+    max_d = pd.to_datetime(months_series.max()).date()
+    dr = st.sidebar.date_input("Date range", value=(min_d, max_d))
+    if isinstance(dr, (list, tuple)) and len(dr) == 2:
+        start, end = dr
+    else:
+        start = dr if not isinstance(dr, (list, tuple)) else min_d
+        end = dr if not isinstance(dr, (list, tuple)) else max_d
 
     # Incident types from crimes
     types = sorted(crimes["primary_type"].dropna().unique()) if (not crimes.empty and "primary_type" in crimes.columns) else []
@@ -210,7 +215,9 @@ def sidebar_filters(crimes: pd.DataFrame, agg: pd.DataFrame):
     # Map mode and scenario modeling slider
     map_mode = st.sidebar.selectbox("Map mode", options=["Tile (OSM)", "Geo (offline)"], index=0)
     reduction = st.sidebar.slider("Incident reduction (%)", min_value=0, max_value=50, step=5, value=0)
-    return (pd.to_datetime(start), pd.to_datetime(end)), type_sel, ca_sel, reduction, map_mode
+    start_m = pd.to_datetime(start).to_period("M").start_time
+    end_m = pd.to_datetime(end).to_period("M").end_time
+    return (start_m, end_m), type_sel, ca_sel, reduction, map_mode
 
 
 # -----------------------------
@@ -375,7 +382,6 @@ def main():
         crimes = crimes[crimes["gun_related"]]
 
     filters = sidebar_filters(crimes, agg)
-    st.write("Filters output:", filters)
     (start_date, end_date), type_sel, ca_sel, reduction, map_mode = filters
 
     # Apply filters on crimes
