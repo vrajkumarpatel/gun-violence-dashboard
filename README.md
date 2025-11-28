@@ -1,5 +1,17 @@
 # Data-Driven Insights into Gun Violence for Community Intervention
 
+## Live App
+
+Open the deployed Streamlit dashboard:
+
+`https://gun-violence-dashboard-l3zedtcamrmhu2yx7ekbcv.streamlit.app/`
+
+## Screenshots
+
+![Dashboard KPIs](Screenshot%202025-11-28%20024849.png)
+![Filters and Charts](Screenshot%202025-11-28%20024807.png)
+![Choropleth Map](Screenshot%202025-11-28%20024653.png)
+
 This project builds a complete analytics system to analyze gun violence incidents in Chicago, identify trends and hotspots, predict high-risk neighborhoods, and provide interactive dashboards and reports for community-based intervention programs.
 
 ## Data Sources
@@ -61,4 +73,3 @@ Then open `http://127.0.0.1:8050/` in your browser.
 
 - Interpret results alongside socioeconomic context; the hardship index and related indicators are proxies and may not capture recent changes.
 - Use the dashboard to explore temporal patterns (e.g., evenings/weekends) and spatial hotspots to inform targeted interventions.
-
