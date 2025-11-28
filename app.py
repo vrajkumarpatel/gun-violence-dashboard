@@ -108,7 +108,11 @@ def load_data():
         if crimes.empty:
             agg = pd.DataFrame()
         else:
-            crimes_ca = crimes.dropna(subset=["community_area"]).copy()
+            # Align monthly aggregation with gun-related scope when available
+            crimes_scoped = crimes.copy()
+            if "gun_related" in crimes_scoped.columns:
+                crimes_scoped = crimes_scoped[crimes_scoped["gun_related"]]
+            crimes_ca = crimes_scoped.dropna(subset=["community_area"]).copy()
             crimes_ca["community_area"] = pd.to_numeric(crimes_ca["community_area"], errors="coerce")
             crimes_ca = crimes_ca.dropna(subset=["community_area"]).copy()
             crimes_ca["is_homicide"] = crimes_ca["primary_type"].astype(str).str.upper().eq("HOMICIDE")
