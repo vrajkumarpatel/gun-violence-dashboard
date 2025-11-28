@@ -39,19 +39,30 @@ def load_data():
 def sidebar_filters(crimes: pd.DataFrame, agg: pd.DataFrame):
     st.sidebar.header("Filters")
     if crimes.empty and agg.empty:
-        return None, None, None
+        # Always return 5 items even when data is missing
+        today = pd.Timestamp.today()
+        return (today, today), [], [], 0, "Geo (offline)"
 
     # Date range from monthly start
-    months = agg["month_start"].dropna().sort_values().unique() if not agg.empty else crimes["month_start"].dropna().sort_values().unique()
-    start = st.sidebar.date_input("Start month", value=pd.to_datetime(months.min()).date())
-    end = st.sidebar.date_input("End month", value=pd.to_datetime(months.max()).date())
+    months_series = None
+    if not agg.empty and "month_start" in agg.columns:
+        months_series = agg["month_start"].dropna().sort_values().unique()
+    elif not crimes.empty and "month_start" in crimes.columns:
+        months_series = crimes["month_start"].dropna().sort_values().unique()
+    else:
+        months_series = np.array([pd.Timestamp.today()])
+    start = st.sidebar.date_input("Start month", value=pd.to_datetime(months_series.min()).date())
+    end = st.sidebar.date_input("End month", value=pd.to_datetime(months_series.max()).date())
 
     # Incident types from crimes
-    types = sorted(crimes["primary_type"].dropna().unique()) if not crimes.empty else []
+    types = sorted(crimes["primary_type"].dropna().unique()) if (not crimes.empty and "primary_type" in crimes.columns) else []
     type_sel = st.sidebar.multiselect("Incident types", options=types, default=[])
 
     # Community areas
-    communities = sorted(pd.Series(np.union1d(crimes.get("community_area", pd.Series(dtype=float)).dropna().unique(), agg.get("community_area", pd.Series(dtype=float)).dropna().unique())).astype(int))
+    communities_crimes = crimes.get("community_area", pd.Series(dtype=float)) if not crimes.empty else pd.Series(dtype=float)
+    communities_agg = agg.get("community_area", pd.Series(dtype=float)) if not agg.empty else pd.Series(dtype=float)
+    communities_all = pd.Series(np.union1d(communities_crimes.dropna().unique(), communities_agg.dropna().unique()))
+    communities = sorted(communities_all.astype(int)) if not communities_all.empty else []
     ca_sel = st.sidebar.multiselect("Community areas", options=communities, default=[])
 
     # Map mode and scenario modeling slider
@@ -221,9 +232,7 @@ def main():
         crimes = crimes[crimes["gun_related"]]
 
     filters = sidebar_filters(crimes, agg)
-    if not filters:
-        st.warning("Data not found. Run the pipeline first: `python main.py --fetch`.")
-        return
+    st.write("Filters output:", filters)
     (start_date, end_date), type_sel, ca_sel, reduction, map_mode = filters
 
     # Apply filters on crimes
